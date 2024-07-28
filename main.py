@@ -1,13 +1,28 @@
-'''
+import matplotlib
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation, FFMpegWriter
+
+import numpy as np
+from scipy import ndimage
+import time
+
+from fluid import Fluid
+from shapes import Shapes
+
+matplotlib.use('TkAgg')
+
+"""
 Simple fluid simulation by Jayden Fung
+
 ---------------------------------------
+
 This is an Eulerian fluid simulation which utilises a 2D grid-based plane to simulate the flow of an
 incompressible, inviscid fluid. To use this simulation, modify parameters within the scene dictionary
 and the setup_scene() function.
+
 ---------------------------------------
 
-
-Keybinds:
+Keybindings:
 p : Show pressure field
 m : Show smoke field
 v : Show velocity field
@@ -15,47 +30,39 @@ v : Show velocity field
 - : Decrease amount of arrows in velocity field
 [ : Decrease arrow size in velocity field
 ] : Increase arrow size in velocity field
+"""
 
-
-'''
-
-
-import matplotlib
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
-matplotlib.use('TkAgg')
-from matplotlib.animation import FFMpegWriter
-
-import numpy as np
-from scipy import ndimage
-
-from fluid import Fluid
-from shapes import Shapes
-
+# Modify this to change features of simulation
 scene = {
-    'dt': 1.0 / 60.0, # Duration of each timestep
-    'numIters': 100, # Higher increases accuracy at the cost of performance
-    'frameNr': 0,
+    'dt': 1.0 / 60.0,  # Duration of each timestep
+    'numIters': 100,  # Higher increases accuracy at the cost of performance
     'overRelaxation': 1.90,
     'paused': False,
     'showObstacle': True,
     'showPressure': False,
     'showSmoke': True,
     'showVelocity': False,
-    'fluidSpeed': 1, # Intake fluid velocity
-    'resolution': 500, # How many pixels vertically
+    'fluidSpeed': 1,  # Intake fluid velocity
+    'resolution': 500,  # How many vertical pixels
     'screenWidth': 16,
     'screenHeight': 9,
-    'density': 1000, # Fluid density, affects pressure
-    'frames': 500, # Amount of frames to run, set to None if you do not want to finish program
+    'density': 1000,  # Fluid density, affects pressure
+    'frames': 500,  # Amount of frames to run, set to None if you do not want to finish program
     'arrowSpacing': 23,
     'arrowScale': 95,
-    'record': False, # When False, view mode enabled
-    'fileName': 'naca_23015_fluid_simulation_smoke_force.mp4' # File stored in videos directory
+    'record': False,  # When False, view mode enabled
+    'fileName': 'naca_4412_fluid_simulation_smoke_force.mp4'  # File stored in videos directory
 }
 
+# Do not modify these - used for interla purposes
+simulation_metrics = {
+    'frameNr': 0,
+    'totalTime': 0.0,
+}
+
+
 def setup_scene():
-    global fluid
+    global fluid, arrow_location
 
     res = scene['resolution']
 
@@ -71,16 +78,7 @@ def setup_scene():
 
     fluid = Fluid(density, numX, numY, h)
 
-    fluid.fill() # Fill up everywhere with fluid
-
-    # Set walls
-    fluid.s[0, :] = 0  # Left wall (required)
-
-
-    # Set inflow
-    fluid.u[1, :] = scene['fluidSpeed']  # Inflow velocity
-
-    # Add obstacles
+    fluid.fill(fluidSpeed=scene['fluidSpeed'])  # Fill up everywhere with fluid
 
     # Set a circular obstacle
     # set_obstacle(Shapes.circle(0.5, 0.5, 0.15))
@@ -95,7 +93,8 @@ def setup_scene():
     set_obstacle(Shapes.naca_airfoil(center_x, center_y, chord, angle_of_attack, naca_number))
     # Note that the centre is actually the leftmost point of the airfoil
 
-    fluid.set_object_center(center_x + chord / 2, center_y)
+    # Set location of force arrow
+    arrow_location = (center_x + chord / 2, center_y)
 
 
 def set_obstacle(shape_func):
@@ -111,25 +110,23 @@ def set_obstacle(shape_func):
                 fluid.v[i, j] = fluid.v[i, j + 1] = 0
 
 
-def simulate():
+def update(frame):
     if not scene['paused']:
         fluid.simulate(scene['dt'], scene['numIters'])
-        scene['frameNr'] += 1
-
-
-def update(frame):
-    simulate()
+        simulation_metrics['frameNr'] += 1
 
     plt.clf()
 
     if scene['showSmoke']:
-        plt.imshow(fluid.m.T, origin='lower', cmap='viridis', vmin=0, vmax=1, extent=[0, fluid.numX * fluid.h, 0, fluid.numY * fluid.h])
+        plt.imshow(fluid.m.T, origin='lower', cmap='viridis', vmin=0, vmax=1,
+                   extent=(0.0, fluid.numX * fluid.h, 0.0, fluid.numY * fluid.h))
         plt.colorbar(label='Smoke Density')
-        plt.title(f"Frame: {scene['frameNr']} - Smoke")
+        plt.title(f"Frame: {simulation_metrics['frameNr']} - Smoke")
     elif scene['showPressure']:
-        plt.imshow(fluid.p.T, origin='lower', cmap='RdBu_r', extent=[0, fluid.numX * fluid.h, 0, fluid.numY * fluid.h])
+        plt.imshow(fluid.p.T, origin='lower', cmap='RdBu_r',
+                   extent=(0.0, fluid.numX * fluid.h, 0.0, fluid.numY * fluid.h))
         plt.colorbar(label='Pressure')
-        plt.title(f"Frame: {scene['frameNr']} - Pressure")
+        plt.title(f"Frame: {simulation_metrics['frameNr']} - Pressure")
     elif scene['showVelocity']:
         # Calculate velocity magnitude
         velocity_mag = np.sqrt(fluid.u ** 2 + fluid.v ** 2)
@@ -140,7 +137,8 @@ def update(frame):
         X, Y = np.meshgrid(x, y)
 
         # Plot velocity magnitude
-        plt.imshow(velocity_mag.T, origin='lower', cmap='viridis', extent=[0, fluid.numX * fluid.h, 0, fluid.numY * fluid.h])
+        plt.imshow(velocity_mag.T, origin='lower', cmap='viridis',
+                   extent=(0.0, fluid.numX * fluid.h, 0.0, fluid.numY * fluid.h))
         plt.colorbar(label='Velocity Magnitude')
 
         # Plot velocity vectors with adjustable spacing and size
@@ -150,7 +148,7 @@ def update(frame):
                    scale=scene['arrowScale'], color='white', alpha=0.8,
                    width=0.002, headwidth=3, headlength=4)
 
-        plt.title(f"Frame: {scene['frameNr']} - Velocity")
+        plt.title(f"Frame: {simulation_metrics['frameNr']} - Velocity")
 
     if scene['showObstacle']:
         # Create a mask of the obstacle
@@ -183,15 +181,15 @@ def update(frame):
         dy = arrow_length * np.sin(force_direction)
 
         # Plot the arrow
-        center_x, center_y = fluid.object_center
+        center_x, center_y = arrow_location
         plt.arrow(center_x, center_y, dx, dy, color='red', width=0.005,
                   head_width=0.02, head_length=0.02, zorder=5)
 
-        # Calculate angle in degrees, with 0 being upwards
+        # Calculate angle in degrees, with 0 degrees being upwards
         angle_deg = (-np.degrees(force_direction) + 90) % 360
 
         # Add force magnitude and angle labels
-        plt.text(center_x-0.05, center_y-0.05, f'F = {force_magnitude:.2f} \n{angle_deg:.1f}°',
+        plt.text(center_x - 0.05, center_y - 0.05, f'F = {force_magnitude:.2f} \n{angle_deg:.1f}°',
                  color='red', fontsize=10, ha='right', va='bottom')
 
 
@@ -221,20 +219,17 @@ def on_key_press(event):
         scene['paused'] = not scene['paused']
 
 
-total_time = 0
-frames = 0
 def animate(frame):
-    global total_time, frames
-    # start = time.time()
+    start = time.time()
     ax.clear()
     update(frame)
-    # end = time.time()
-    # timestep = end - start
-    # total_time += timestep
-    # frames += 1
+    end = time.time()
+    timestep = end - start
+    simulation_metrics['totalTime'] += timestep
     # print(f"Timestep: {end-start}s")
-    # print(f"Average timestep: {total_time / frames}s")
+    # print(f"Average timestep: {simulation_metrics['totalTime']  / simulation_metrics['frameNr']}s")
     return ax,
+
 
 setup_scene()
 
@@ -246,13 +241,10 @@ fig.canvas.mpl_connect('key_press_event', on_key_press)
 anim = FuncAnimation(fig, animate, frames=scene['frames'], interval=20, blit=False)
 
 if scene['record']:
-
     # Set up the writer
-    writer = FFMpegWriter(fps = 1/scene['dt'], metadata=dict(artist='Me'), bitrate=1800)
+    writer = FFMpegWriter(fps=1 / scene['dt'], metadata=dict(artist='Me'), bitrate=1800)
 
     # Save the animation
-    anim.save(str('/Users/jaydenfung/PycharmProjects/fluid_simulation/videos/'+scene['fileName']), writer=writer)
-
+    anim.save(str('/Users/jaydenfung/PycharmProjects/fluid_simulation/videos/' + scene['fileName']), writer=writer)
 else:
-
     plt.show()
