@@ -1,8 +1,13 @@
 import numba as nb
 import time
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
 
-@nb.njit(parallel=True)
+# Set number of threads for parallel processing
+NUM_THREADS = multiprocessing.cpu_count()
+
+@nb.njit(nopython=True, parallel=True)
 def solve_incompressibility(u, v, p, s, density, h, dt, numIters, overRelaxation):
     cp = density * h / dt
     n, m = u.shape[0] - 1, u.shape[1] - 1
@@ -37,7 +42,7 @@ def solve_incompressibility(u, v, p, s, density, h, dt, numIters, overRelaxation
     return u, v, p
 
 
-@nb.jit(nopython=True)
+@nb.jit(nopython=True, parallel = True)
 def extrapolate(u, v):
     for i in range(u.shape[0]):
         u[i, 0] = u[i, 1]
@@ -48,7 +53,7 @@ def extrapolate(u, v):
     return u, v
 
 
-@nb.jit(nopython=True)
+@nb.jit(nopython=True, parallel=True)
 def advect_vel(u, v, s, h, dt):
     newU = u.copy()
     newV = v.copy()
@@ -73,7 +78,7 @@ def advect_vel(u, v, s, h, dt):
     return newU, newV
 
 
-@nb.jit(nopython=True)
+@nb.jit(nopython=True, parallel=True)
 def advect_smoke(m, u, v, s, h, dt):
     newM = m.copy()
     for i in range(1, m.shape[0] - 1):
@@ -87,7 +92,7 @@ def advect_smoke(m, u, v, s, h, dt):
     return newM
 
 
-@nb.jit(nopython=True)
+@nb.jit(nopython=True, parallel=True)
 def sample_field(x, y, field, h, field_type):
     h1 = 1.0 / h
     h2 = 0.5 * h
@@ -113,7 +118,7 @@ def sample_field(x, y, field, h, field_type):
             sx * ty * field[x0, y1])
 
 
-@nb.njit(parallel=True)
+@nb.njit(nopython=True, parallel=True)
 def calculate_force_optimized(s, p, h, numX, numY):
     force = np.zeros(2, dtype=np.float64)
 
@@ -138,6 +143,16 @@ def calculate_force_optimized(s, p, h, numX, numY):
 
     return force, magnitude, direction, np.degrees(direction)
 
+
+import numba as nb
+import time
+import numpy as np
+from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
+
+
+# Previous functions remain the same...
+
 class Fluid:
     def __init__(self, density: float, numX: int, numY: int, h: float, atmosphere: float = 1000):
         self.density = density
@@ -145,8 +160,8 @@ class Fluid:
         self.numY = numY
         self.numCells = self.numX * self.numY
         self.h = h
-        self.u = np.zeros((self.numX, self.numY)) # Fluid velocity to the right
-        self.v = np.zeros((self.numX, self.numY)) # Fluid velocity downwards
+        self.u = np.zeros((self.numX, self.numY))
+        self.v = np.zeros((self.numX, self.numY))
         self.newU = np.zeros((self.numX, self.numY))
         self.newV = np.zeros((self.numX, self.numY))
         self.p = np.zeros((self.numX, self.numY))
@@ -154,36 +169,43 @@ class Fluid:
         self.m = np.zeros((self.numX, self.numY))
         self.newM = np.zeros((self.numX, self.numY))
         self.atmosphere = atmosphere
+        self.executor = ThreadPoolExecutor(max_workers=NUM_THREADS)
 
-        # Calculate smoke size at intake
         rect_height = self.numY // 8
         self.start_y = self.numY // 2 - rect_height // 2
         self.end_y = self.start_y + rect_height
 
     def simulate(self, dt: float, numIters: int) -> None:
         start = time.time()
-        self.m[1, self.start_y:self.end_y] = 1.0  # Add smoke
-        self.p.fill(self.atmosphere)
-        misc = time.time()
 
-        self.u, self.v, self.p = solve_incompressibility(self.u, self.v, self.p, self.s, self.density, self.h, dt, numIters, 1.9)
-        incompress = time.time()
+        # Use thread pool for smoke addition and pressure initialization
+        def init_simulation():
+            self.m[1, self.start_y:self.end_y] = 1.0
+            self.p.fill(self.atmosphere)
 
-        self.u, self.v = extrapolate(self.u, self.v)
-        extra = time.time()
+        self.executor.submit(init_simulation)
 
-        self.u, self.v = advect_vel(self.u, self.v, self.s, self.h, dt)
-        velo = time.time()
+        # Main simulation steps
+        futures = []
 
-        self.m = advect_smoke(self.m, self.u, self.v, self.s, self.h, dt)
-        smoke = time.time()
+        # Solve incompressibility
+        futures.append(self.executor.submit(
+            lambda: solve_incompressibility(self.u, self.v, self.p, self.s,
+                                            self.density, self.h, dt, numIters, 1.9)))
 
-        # print(f"Misc: {misc-start}")
-        # print(f"Incompress: {incompress-misc}")
-        # print(f"Extra: {extra-incompress}")
-        # print(f"Velocity: {velo-extra}")
-        # print(f"Smoke: {smoke-velo}")
-        # print(f"Simulation total: {time.time()-start}")
+        # Wait for incompressibility to complete before continuing
+        self.u, self.v, self.p = futures[-1].result()
+
+        # Extrapolate and advect in parallel
+        futures = []
+        futures.append(self.executor.submit(lambda: extrapolate(self.u, self.v)))
+        futures.append(self.executor.submit(lambda: advect_vel(self.u, self.v, self.s, self.h, dt)))
+        futures.append(self.executor.submit(lambda: advect_smoke(self.m, self.u, self.v, self.s, self.h, dt)))
+
+        # Collect results
+        self.u, self.v = futures[0].result()
+        self.u, self.v = futures[1].result()
+        self.m = futures[2].result()
 
     def fill(self, fluidSpeed: float) -> None:
         # Fill scenario with fluid
@@ -207,3 +229,6 @@ class Fluid:
             'direction_rad': direction,
             'direction_deg': direction_deg
         }
+
+    def __del__(self):
+        self.executor.shutdown()

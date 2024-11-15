@@ -70,6 +70,12 @@ simulation_metrics = {
     'totalTime': 0.0,
 }
 
+performance_metrics = {
+    'event_handling': 0,
+    'calculations': 0,
+    'visualization': 0,
+    'total_time': 0
+}
 
 def setup_scene():
     global fluid, arrow_location
@@ -442,9 +448,47 @@ if scene['pyGame']:
         screen.blit(text, (center_x - TEXT_OFFSET_X, center_y - TEXT_OFFSET_Y))
 
 
+    def render_performance_metrics(screen):
+        if not hasattr(render_performance_metrics, 'font'):
+            render_performance_metrics.font = pygame.font.Font(None, 20)
+
+        # Prevent division by zero for FPS calculation
+        fps = 1000 / performance_metrics['total_time'] if performance_metrics['total_time'] > 0 else 0
+
+        metrics_text = [
+            f"Event handling: {performance_metrics['event_handling']:.1f}ms",
+            f"Calculations: {performance_metrics['calculations']:.1f}ms",
+            f"Visualization: {performance_metrics['visualization']:.1f}ms",
+            f"Total time: {performance_metrics['total_time']:.1f}ms",
+            f"FPS: {fps:.1f}"
+        ]
+
+        # Create background rectangle
+        padding = 10
+        line_height = 20
+        text_width = 200
+        text_height = (len(metrics_text) * line_height) + (padding * 2)
+
+        # Draw semi-transparent background
+        background_surface = pygame.Surface((text_width, text_height))
+        background_surface.fill((0, 0, 0))
+        background_surface.set_alpha(128)
+        screen.blit(background_surface, (WINDOW_WIDTH - text_width - padding, padding))
+
+        # Render text
+        for i, text in enumerate(metrics_text):
+            text_surface = render_performance_metrics.font.render(text, True, (255, 255, 255))
+            screen.blit(text_surface,
+                        (WINDOW_WIDTH - text_width,
+                         padding + (i * line_height) + padding))
+
+
     running = True
     while running and (scene['frames'] is None or simulation_metrics['frameNr'] < scene['frames']):
+        # Start timing the frame
         start = fstart = time.time()
+
+        # Event handling
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -471,16 +515,21 @@ if scene['pyGame']:
                     scene['arrowScale'] = max(10, scene['arrowScale'] - 5)
                 elif event.key == pygame.K_SPACE:
                     scene['paused'] = not scene['paused']
-        logging.warning(f"event handling: {(time.time() - start) * 1000}ms")
+
+        performance_metrics['event_handling'] = (time.time() - start) * 1000
         start = time.time()
 
+        # Fluid simulation calculations
         if not scene['paused']:
             fluid.simulate(scene['dt'], scene['numIters'])
             simulation_metrics['frameNr'] += 1
-        # screen.fill((0, 0, 0))
-        logging.warning(f"calculations: {(time.time() - start) * 1000}ms")
 
+        performance_metrics['calculations'] = (time.time() - start) * 1000
         start = time.time()
+
+        # Visualization
+        screen.fill((0, 0, 0))  # Clear screen
+
         # Draw the appropriate visualization
         if scene['showSmoke']:
             surface = create_color_surface(fluid.m, 'viridis', 0, 1)
@@ -494,18 +543,23 @@ if scene['pyGame']:
             screen.blit(surface, (0, 0))
             draw_velocity_arrows(screen, fluid, scene['arrowSpacing'], scene['arrowScale'])
 
+        # Draw obstacles and force vectors if enabled
         if scene['showObstacle']:
             obstacle_outline.draw(screen)
             draw_force_vector(screen, fluid, arrow_location)
-        logging.warning(f"visualisation: {(time.time() - start) * 1000}ms")
 
+        # Draw performance metrics
+        render_performance_metrics(screen)
 
+        performance_metrics['visualization'] = (time.time() - start) * 1000
+        performance_metrics['total_time'] = (time.time() - fstart) * 1000
+
+        # Update display
         pygame.display.flip()
         clock.tick(int(1 / scene['dt']))
-        logging.warning(f"Total time: {(time.time() - fstart) * 1000}ms")
-
 
     pygame.quit()
+
 else:
     # Set up the figure and axis
     fig, ax = plt.subplots(figsize=(scene['screenWidth'], scene['screenHeight']))
