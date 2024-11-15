@@ -113,6 +113,31 @@ def sample_field(x, y, field, h, field_type):
             sx * ty * field[x0, y1])
 
 
+@nb.njit(parallel=True)
+def calculate_force_optimized(s, p, h, numX, numY):
+    force = np.zeros(2, dtype=np.float64)
+
+    # Pre-compute neighbor offsets
+    neighbors = np.array([(-1, 0), (1, 0), (0, -1), (0, 1),
+                          (-1, -1), (-1, 1), (1, -1), (1, 1)], dtype=np.int32)
+
+    for i in nb.prange(2, numX - 1):
+        force_thread = np.zeros(2, dtype=np.float64)
+        for j in range(2, numY - 1):
+            if s[i, j] == 0:  # Obstacle cell
+                for di, dj in neighbors:
+                    ni, nj = i + di, j + dj
+                    if 0 <= ni < numX and 0 <= nj < numY and s[ni, nj] != 0:
+                        pressure_force = p[ni, nj] * h
+                        force_thread[0] += -pressure_force * di
+                        force_thread[1] += -pressure_force * dj
+        force += force_thread
+
+    magnitude = np.sqrt(force[0] ** 2 + force[1] ** 2)
+    direction = np.arctan2(force[1], force[0])
+
+    return force, magnitude, direction, np.degrees(direction)
+
 class Fluid:
     def __init__(self, density: float, numX: int, numY: int, h: float, atmosphere: float = 1000):
         self.density = density
@@ -172,27 +197,9 @@ class Fluid:
         self.u[1, :] = fluidSpeed  # Intake fluid speed
 
     def calculate_force(self) -> dict:
-        force = np.zeros(2)  # [Fx, Fy]
-
-        for i in range(2, self.numX - 1):
-            for j in range(2, self.numY - 1):
-                if self.s[i, j] == 0:  # This is an obstacle cell
-                    # Check all neighboring cells
-                    for di, dj in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]:
-                        ni, nj = i + di, j + dj
-                        if self.numX > ni >= 0 != self.s[ni, nj] and 0 <= nj < self.numY:  # This is a fluid cell
-
-                            pressure_force = self.p[ni, nj] * self.h
-                            pressure_force_x = -1 * pressure_force * di
-                            pressure_force_y = -1 * pressure_force * dj
-                            force += pressure_force_x, pressure_force_y
-
-        # Calculate magnitude and direction
-        magnitude = np.linalg.norm(force)
-        direction = np.arctan2(force[1], force[0])  # in radians
-
-        # Convert direction to degrees
-        direction_deg = np.degrees(direction)
+        force, magnitude, direction, direction_deg = calculate_force_optimized(
+            self.s, self.p, self.h, self.numX, self.numY
+        )
 
         return {
             'force_vector': force,
